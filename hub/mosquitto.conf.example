@@ -1,0 +1,14 @@
+# Local PoC MQTT broker for the wifi-sensing hub.
+# The laptop joins the receiver's AP network; receivers publish here.
+#
+# Install mosquitto (macOS):   brew install mosquitto
+# Run:                         mosquitto -c mosquitto.conf.example
+
+listener 1883 0.0.0.0
+allow_anonymous true
+
+persistence false
+log_dest stdout
+log_type error
+log_type warning
+log_type notice

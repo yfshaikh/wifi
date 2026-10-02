@@ -1,0 +1,81 @@
+menu "Sensing Network Config (RX)"
+
+    config AP_SSID
+        string "AP SSID (sensing network name)"
+        default "wifi-sense-rx"
+        help
+            The receiver acts as the access point for the sensing link. The
+            transmitter and the hub's laptop both connect to this network.
+            Setting this here only seeds the default; override per board at
+            runtime with the serial command APSSID: <name>.
+
+    config AP_PASSWORD
+        string "AP Password (min 8 chars, empty = open)"
+        default "wifi-sense-123"
+        help
+            WPA2 password for the sensing network. If left empty the AP runs
+            open. Minimum length for WPA2 is 8 characters.
+
+    config AP_CHANNEL
+        int "AP WiFi Channel"
+        default 6
+        range 1 14
+        help
+            WiFi channel the sensing AP operates on. In North America valid
+            channels are 1..11. Both TX (STA_CHANNEL) and RX (AP_CHANNEL)
+            must agree on the sensing channel.
+
+    config SHOULD_COLLECT_CSI
+        bool "Should this ESP32 collect and print/publish CSI data?"
+        default "y"
+
+    config SEND_CSI_TO_SERIAL
+        depends on SHOULD_COLLECT_CSI
+        bool "Send CSI data to Serial"
+        default "y"
+        help
+            Prints upstream-compatible CSI_DATA lines to the serial console.
+
+endmenu
+
+menu "Reporting Network Config (RX)"
+
+    config NODE_ID
+        string "Node ID (default)"
+        default "rx-1"
+        help
+            Unique ID for this receiver. It appears on every MQTT record and
+            in the MQTT topic (<mqtt_topic>/<node_id>/data). Override at
+            runtime with serial command NODEID: <id>.
+
+    config MQTT_HOST
+        string "MQTT Broker Host (IP or hostname)"
+        default ""
+        help
+            Reachable broker on the sensing network (e.g. the laptop running
+            mosquitto). This is the reporting network - deliberately separate
+            from the sensing channel config above. Override at runtime with
+            MQTTHOST: <ip>.
+
+    config MQTT_PORT
+        int "MQTT Broker Port"
+        default 1883
+        range 1 65535
+
+    config MQTT_TOPIC
+        string "MQTT Base Topic"
+        default "csi"
+        help
+            Records are published to <mqtt_topic>/<node_id>/data. The hub
+            subscribes to <mqtt_topic>/+/data so any number of nodes merge
+            into one stream.
+
+    config SEND_CSI_TO_MQTT
+        depends on SHOULD_COLLECT_CSI
+        bool "Publish CSI to MQTT"
+        default "y"
+        help
+            Each CSI capture is published as a CSV record carrying
+            node_id,seq,raw CSI. Requires MQTT_HOST to be configured.
+
+endmenu

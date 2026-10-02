@@ -1,0 +1,21 @@
+# --- console: UART0 = the CH343 USB port ---
+CONFIG_ESPTOOLPY_MONITOR_BAUD=921600
+CONFIG_ESP_CONSOLE_UART_DEFAULT=n
+CONFIG_ESP_CONSOLE_UART_CUSTOM=y
+CONFIG_ESP_CONSOLE_UART_BAUDRATE=921600
+
+# --- flash layout: 4MB works on 4MB and 8MB C6 boards ---
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+CONFIG_PARTITION_TABLE_SINGLE_APP_LARGE=y
+
+# --- 1 ms ticks: the packet-rate loop delays in ms via vTaskDelay ---
+CONFIG_FREERTOS_HZ=1000
+
+# --- sensing channel (TX is the station, connects to the RX's AP) ---
+CONFIG_STA_SSID="wifi-sense-rx"
+CONFIG_STA_PASSWORD="wifi-sense-123"
+CONFIG_STA_CHANNEL=0
+CONFIG_PACKET_RATE=100
+
+# --- CSI collection is OFF on the transmitter ---
+CONFIG_SHOULD_COLLECT_CSI=n

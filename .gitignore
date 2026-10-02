@@ -1,0 +1,13 @@
+.pio/
+sdkconfig
+sdkconfig.*
+!sdkconfig.defaults
+# PIO-generated top-level IDF CMakeLists (kept out of git; recreated on build)
+firmware/rx/CMakeLists.txt
+firmware/tx/CMakeLists.txt
+coverage/
+.pytest_cache/
+__pycache__/
+*.pyc
+hub/data/*.csv
+.DS_Store.venv/

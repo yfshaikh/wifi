@@ -1,0 +1,47 @@
+menu "Sensing Network Config (TX)"
+
+    config STA_SSID
+        string "AP SSID to connect to (the RX's network)"
+        default "wifi-sense-rx"
+        help
+            The transmitter is a station that connects to the receiver's AP.
+            This must match the RX's AP_SSID. Override at runtime with the
+            serial command STASSID: <name>.
+
+    config STA_PASSWORD
+        string "AP Password (match the RX)"
+        default "wifi-sense-123"
+        help
+            Password for the sensing network. Must match the RX's AP_PASSWORD.
+
+    config STA_CHANNEL
+        int "AP WiFi Channel (0 = auto-scan)"
+        default 0
+        range 0 14
+        help
+            0 lets the station auto-scan for the SSID. Set it to the RX's
+            AP_CHANNEL to skip scanning and bind faster.
+
+    config PACKET_RATE
+        int "Packet TX Rate (packets per second)"
+        default "100"
+        range 1 1000
+        help
+            The transmitter bursts UDP packets at this rate; the receiver
+            produces one CSI record per packet. 0 means "as fast as possible"
+            (soft-capped ~100 Hz by the OS delay). Serial command RATE: <n>
+            changes this live.
+
+    config SHOULD_COLLECT_CSI
+        bool "Should this ESP32 collect and print CSI data?"
+        default "n"
+        help
+            Keep OFF on the transmitter - CSI is only meaningful at the RX
+            and collecting here halves the achievable sampling rate.
+
+    config SEND_CSI_TO_SERIAL
+        depends on SHOULD_COLLECT_CSI
+        bool "Send CSI data to Serial"
+        default "n"
+
+endmenu
