@@ -1,42 +1,44 @@
 # Architecture
 
-## Why the roles are inverted vs. a "normal" TX/RX pair
+## Topology: one TX broadcasts, any number of RXs listen
 
-CSI is a measurement a WiFi device makes on the **frames it receives**. So the
-node you point at the environment has to be the one *getting* traffic. The
-ESP32 CSI Tool's canonical pairing encodes that:
+CSI is a measurement a WiFi radio makes on the **frames it receives**, so the
+design is one known transmitter and as many listeners as you like:
 
-- **TX = active station** (`firmware/tx`, fork of `active_sta`). It joins the
-  RX's AP and loops `sendto("1\n", 192.168.4.1:2223)` at `PACKET_RATE` packets
-  per second (default 100, live-changeable via the `RATE` serial command).
-- **RX = active AP** (`firmware/rx`, fork of `active_ap`). The AP's WiFi
-  driver measures CSI on every frame the station sends (no application-level
-  socket needed), so the CSI callback fires at roughly the TX packet rate.
+- **TX** (`firmware/tx`) joins the home WiFi, takes the fixed MAC
+  `1a:00:00:00:00:01`, and broadcasts a 4-byte ESP-NOW frame (a counter)
+  every `1000 / RATE` ms (default 100/s, changeable live with `RATE:`). The
+  frames go straight over the air, not through the router, as 802.11n HT20
+  at MCS0. ESP-NOW's default 1 Mbps 802.11b format has no OFDM subcarriers
+  and would yield no CSI.
+- **RX** (`firmware/rx`) joins the same home WiFi and listens to the whole
+  channel (promiscuous mode). The CSI callback drops every frame whose sender
+  doesn't start with `1a:00:00:00:00`, so each RX keeps exactly the TX's
+  frames with no per-board TX setup. Each kept frame becomes one record,
+  published over MQTT to the hub on the home network.
 
-Because the RX is the AP, the sensing link *is* the network: the laptop (and
-future receivers) connect to the same AP, which is what lets MQTT work with no
-external router.
+Because every board joins the same router, they all sit on its channel
+automatically, and follow it if the router changes channel.
 
 ## Data flow
 
 ```
-TX ESP32                RX ESP32                              laptop
---------                --------                              ------
-UDP burst          PHY CSI callback                  
-  "1\n"            builds CSV record:                         
-                   node_id,seq,role,mac,            esp-mqtt   mosquitto
-                   rssi,...,len,csi  ── QoS0 ───▶  topic      ──▶ csi_hub.py
-                   publishes to                     csi/<node>/data
-                                                     (on the RX's own AP net)
-                                                    subscribes csi/+/data,
+TX ESP32                 RX ESP32 (×N)                         laptop (home WiFi)
+--------                 -------------                         ------------------
+ESP-NOW broadcast   ─▶   CSI callback (TX frames only)
+HT20 MCS0, 100/s         seq++, format CSV record
+from 1a:..:00:01         ─▶ 32 KB ring buffer ─▶ publisher ─▶  mosquitto :1883
+                                         topic csi/<node>/data      │
+                                                                     ▼
+                                                    csi_hub.py subscribes csi/+/data,
                                                     stamps arrival_epoch,
-                                                    appends data/<node>.csv
+                                                    appends data/<node>.csv, live plot
 ```
 
 MQTT topic: `<mqtt_topic>/<node_id>/data`. Topics are per-node, so the hub's
 single subscription `csi/+/data` scales to any number of receivers.
 
-## Record format (one CSV row per packet)
+## Record format (one CSV row per frame)
 
 ```
 arrival_epoch,node_id,seq,role,mac,rssi,rate,sig_mode,mcs,bandwidth,smoothing,
@@ -45,50 +47,57 @@ secondary_channel,local_timestamp,ant,sig_len,rx_state,real_time_set,
 real_timestamp,len,csi
 ```
 
-- `arrival_epoch` — hub wall clock (seconds, ms precision). The sync anchor.
-- `node_id` — from per-board NVS config.
-- `seq` — per-board monotonic counter, incremented per captured packet.
-- `local_timestamp` — ESP32 PHY RX timestamp (`rx_ctrl.timestamp`).
-- `real_timestamp` — ESP32 steady clock, seconds since boot.
-- `csi` — raw complex CSI, `[I0 Q0 I1 Q1 ...]` int8 pairs: 128 values of
-  HT20 HT-LTF (64 subcarriers). The RX AP is pinned to 802.11b/g/n at 20 MHz so
-  every record has this shape. The C6's subcarrier order differs from the
-  classic ESP32's and L-LTF isn't captured (esp-idf issue #14271).
+- `arrival_epoch`: hub wall clock (seconds). The shared timeline.
+- `node_id`: from per-board NVS config.
+- `seq`: per-board counter, +1 per captured frame. Gaps mean drops.
+- `role`: `RX`. `mac`: the sender, i.e. the TX (`1A:00:00:00:00:01`).
+- `local_timestamp`: RX radio timestamp in µs (`rx_ctrl.timestamp`). Gaps of
+  10 ms at RATE 100.
+- `real_timestamp`: RX steady clock, seconds since boot.
+- `csi`: raw complex CSI, `[I0 Q0 I1 Q1 ...]` int8 pairs: 128 values of HT20
+  HT-LTF (64 subcarrier slots). Only HT20 frames produce CSI, so every record
+  has this shape; the router's HT40 / WiFi 6 frames are ignored. The C6's
+  subcarrier order differs from the classic ESP32's, and L-LTF isn't captured
+  (esp-idf issue #14271). Slots 0–3, 32 (DC) and 61–63 are always 0.
 
 ESP32-C6 notes: the C6's `rx_ctrl` has no `mcs`, `smoothing`, `not_sounding`,
 `aggregation`, `stbc`, `fec_coding`, `sgi`, `ampdu_cnt`, or `ant` fields, so
 those columns are always 0. The columns stay so the schema matches the
-upstream CSI tool. `sig_mode` carries the C6's `cur_bb_format` code and
-`bandwidth` is 1 when a secondary (HT40) channel is set. If the C6 flags the
-first 4 CSI bytes as invalid (a hardware limitation), they are written as 0.
+upstream CSI tool. `sig_mode` carries the C6's `cur_bb_format` code (2 = HT)
+and `bandwidth` is 1 when a secondary (HT40) channel is set. If the C6 flags
+the first 4 CSI bytes as invalid (a hardware limitation), they are written
+as 0.
 
 Schema is fixed at the hub (csv header written once per node file); adding a
 receiver adds a file, never a column.
 
-## Independent configuration of sensing vs. reporting
+## Configuration
 
-Two separate config blocks, both available from the RX serial console and
-stored in NVS (`wifi_sensing` namespace):
+All settings are typed over each board's serial console and stored in NVS
+(`wifi_sensing` namespace). Every board runs the same firmware for its role.
 
-| Concern             | Keys                                        |
-|---------------------|---------------------------------------------|
-| Sensing channel     | `APSSID`, `APPASS`, `APCH` (RX = AP), `STASSID`, `STAPASS`, `STACH`, `RATE` (TX) |
-| Reporting network   | `NODEID`, `MQTTHOST`, `MQTTPORT`, `MQTTTOPIC` |
+| Group     | Keys                                   | Boards |
+|-----------|----------------------------------------|--------|
+| Home WiFi | `STASSID`, `STAPASS`                   | all    |
+| Sensing   | `RATE`                                 | TX     |
+| Reporting | `NODEID`, `MQTTHOST`, `MQTTPORT`, `MQTTTOPIC` | RX |
 
-They're decoupled even though today they ride the same radio: point
-`MQTTHOST` at any broker reachable on that network, or later move reporting to
-wired Ethernet with no firmware changes (only `mqtt_component.h`/`main.cc`
-plumbing).
+`SHOWCONFIG` prints the current values (the password only as "(set)");
+`REBOOT` applies them.
+
+**Sensing channel vs. reporting network.** The sensing and reporting
+*settings* are separate groups, but with one radio per board the sensing
+*channel* is the home WiFi's channel: a board can only listen on the channel
+it is connected on. To choose the sensing channel independently, reporting
+would need a second path (Ethernet, a second radio, or USB to a host). Only
+the WiFi and MQTT sections of `firmware/rx/main/main.cc` would change; the
+record format and hub stay the same.
 
 ## Adding a receiver (config only, no code)
 
-1. Flash the same `firmware/rx` image to a new board.
-2. `NODEID: <unique>`, `MQTTHOST: <broker>`, optionally a distinct
-   `APSSID`/`APCH`, then `REBOOT`.
-3. Flash a `firmware/tx` image for that link if it doesn't share one already
-   (a transmitter is a station and can only follow one AP at a time).
+1. Flash `firmware/rx` to a new board.
+2. Over serial: `STASSID:`, `STAPASS:`, `NODEID: rx-2` (unique),
+   `MQTTHOST: <laptop IP>`, then `REBOOT`.
 
-Scaling note: one TX serves one RX because a station associates with a single
-AP. If you later want many RX nodes per TX, switch RXs to the tool's
-`passive` fork (stations sniffing one TX AP's downlink) — that's a firmware
-swap, not a hub change.
+The new board hears the existing TX immediately, and the hub writes
+`data/rx-2.csv` as soon as its first record arrives.

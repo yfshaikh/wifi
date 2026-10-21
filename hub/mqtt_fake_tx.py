@@ -6,7 +6,7 @@ stamp, per-node CSV) with no hardware and no sensing link up.
 
 Examples:
   python3 mqtt_fake_tx.py --node rx-1 --rate 50
-  python3 mqtt_fake_tx.py --node rx-2 --rate 30 --host 192.168.4.1
+  python3 mqtt_fake_tx.py --node rx-2 --rate 30 --host 192.168.1.50
 """
 
 import argparse
@@ -17,7 +17,7 @@ import time
 
 import paho.mqtt.client as mqtt
 
-_RECORD_TEMPLATE = ("{node},{seq},AP,{mac},{rssi},{rate},1,{mcs},0,1,0,0,"
+_RECORD_TEMPLATE = ("{node},{seq},RX,{mac},{rssi},{rate},1,{mcs},0,1,0,0,"
                     "0,0,1,{noise_floor},0,{channel},0,{local_ts},{ant},{sig_len},"
                     "{rx_state},0,{real_ts},{len},{csi}")
 
@@ -41,7 +41,7 @@ def build_record(node, seq, rssi_base):
     return _RECORD_TEMPLATE.format(
         node=node,
         seq=seq,
-        mac="20:6E:F1:00:00:01",  # one fixed TX, like the real link
+        mac="1A:00:00:00:00:01",  # the real TX's fixed address
         rssi=int(rssi_base + random.gauss(0, 1.5)),
         rate=11,
         mcs=7,

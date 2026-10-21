@@ -24,7 +24,7 @@ Record schema (CSV written to disk, one row per packet):
 
 Usage:
   python3 csi_hub.py                                  # write to ./data
-  python3 csi_hub.py --host 192.168.4.1 --data-dir data
+  python3 csi_hub.py --host 192.168.1.50 --data-dir data
   python3 csi_hub.py --live                           # + live CSI heatmap + motion score
 """
 
@@ -92,8 +92,8 @@ class Hub:
     # ----- live plot bookkeeping -----
     def _append_history(self, node_id, mac, t, amp):
         """Keep only the node's dominant source MAC -- the TX at 100 pkt/s.
-        Other stations on the AP (e.g. the hub laptop) also yield CSI, but from
-        a different path, and would scramble the plot."""
+        The RX firmware already drops non-TX frames; this is a backstop for
+        fake or mixed data, where a second source would scramble the plot."""
         h = self._histories.setdefault(node_id, {
             "macs": collections.Counter(),
             "t": collections.deque(maxlen=LIVE_SECONDS * 150),

@@ -13,8 +13,11 @@ The CSI Tool is itself research software. If you use it, please cite:
 > Sensing for Active Repositioning and Mobility," 2020 IEEE WoWMoM.
 > https://www.people.vcu.edu/~ebulut/wowmom20-WiFiSensing.pdf
 
-The upstream header components are vendored under `firmware/_components/`
-(see the README there for which files are upstream vs. modified).
+Code derived from it now lives in `firmware/rx/main/main.cc` and
+`firmware/tx/main/main.cc`: the NVS setup, the serial settings console, and
+the CSI callback and record layout (ported to the ESP32-C6 / ESP-IDF 5 CSI
+API). The upstream SD-card, UDP-sender and clock-setting components were
+dropped.
 
 Modified/vendored upstream code retains its original MIT copyright notice:
 Copyright (c) 2020 Steven M. Hernandez.

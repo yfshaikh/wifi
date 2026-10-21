@@ -1,8 +1,8 @@
 # WiFi sensing over CSI with two ESP32s
 
 A proof-of-concept WiFi sensing system: one ESP32 **transmits** a packet
-stream, a second ESP32 **receives** it, measures Channel State Information
-(CSI) on every packet, and publishes each CSI record over MQTT to a central
+stream, one or more ESP32s **receive** it, measure Channel State Information
+(CSI) on every packet, and publish each CSI record over MQTT to a central
 hub. The hub stamps arrival time and writes per-node CSV files whose schema
 stays fixed as more receivers are added.
 
@@ -18,16 +18,15 @@ signal we ultimately want to turn into a motion/occupancy decision.
 The project deliberately splits that pipeline into reusable pieces so it can
 grow from a one-room demo into a small sensor network:
 
-1. **Sensing link** — one ESP32 transmits a fixed, configurable packet stream;
-   a second ESP32 receives it and extracts CSI per packet. The two radios are
-   dedicated to the sensing channel and are fully controllable (channel,
-   packet rate).
-2. **Reporting network** — the receiver publishes each CSI record over MQTT to
-   a central hub, so the data is live-visible and easily recorded. The sensing
-   channel and the reporting configuration are independent by design.
+1. **Sensing link** — one ESP32 broadcasts a fixed, configurable packet
+   stream; every receiver extracts CSI per packet.
+2. **Reporting network** — each receiver publishes its CSI records over MQTT
+   to a central hub, so the data is live-visible and easily recorded. Sensing
+   and reporting settings are separate groups (see `docs/architecture.md` for
+   how the single radio ties the sensing channel to the home WiFi's).
 3. **Scale by configuration, not code** — every receiver runs identical
-   firmware; a new receiver is added by giving it a node ID and broker address
-   over its serial console (stored in NVS). The hub's subscription and on-disk
+   firmware; a new receiver is added by giving it the WiFi details, a node ID
+   and the broker address over its serial console (stored in NVS). The hub's subscription and on-disk
    format don't change as nodes are added.
 4. **Detection lives above the data** — motion detection is deliberately not
    baked into the firmware. The hub writes clean, schema-fixed records so you
@@ -41,27 +40,26 @@ Built on the [ESP32 CSI Tool](https://stevenmhernandez.github.io/ESP32-CSI-Tool/
 (upstream commit `cce5b1a`, MIT — see `THIRD_PARTY.md`).
 
 ```
-                ┌─────────────┐      sensing link (2.4 GHz)       ┌─────────────┐
-   TX ESP32 ───▶│  station    │ ─────── UDP burst @ 100 pkt/s ───▶│  access   │◀──┐
-   (fw: tx)     │  esp32      │   (packets the TX sends)          │  point    │   │  MQTT
-                └─────────────┘                                   │  esp32     │───┤  <topic>/<node>/data
-   laptop:                        joins the same WiFi network ◀───│ (fw: rx)   │   │
-   mosquitto + csi_hub.py ──────────────────────────────────────────────────────┘   │
-                                                                                      │
-   hub subscribes csi/+/data, stamps arrival, writes data/<node>.csv ◀───────────────┘
+  TX ESP32 ── ESP-NOW broadcast, 802.11n HT20, 100/s ──▶ RX ESP32 (one or many)
+  (fw: tx)    from fixed MAC 1a:00:00:00:00:01            (fw: rx) keeps TX frames only,
+                                                           one CSI record per frame
+                                                              │ MQTT csi/<node>/data
+                          all boards + laptop on home WiFi    ▼
+                                         laptop: mosquitto ─▶ csi_hub.py
+                                         subscribes csi/+/data, stamps arrival,
+                                         writes data/<node>.csv, live plot
 ```
 
-Key point about roles: in the CSI tool's convention the **transmitter is the
-station** and the **receiver is the access point**. The AP gets CSI from the
-station's uplink packets, so the RX (detector) is the AP — which conveniently
-lets the laptop and any future receivers all sit on the same sensing network.
+Every board joins your home WiFi. That puts them all on the router's channel,
+where the TX's ESP-NOW broadcasts reach every receiver directly, and lets the
+receivers reach the laptop's broker through the router.
 
 ## Repository layout
 
 ```
-firmware/_components/   shared header components (vendored upstream + new)
-firmware/rx/            PlatformIO project: receiver/AP  -> publishes CSI over MQTT
-firmware/tx/            PlatformIO project: transmitter/station -> bursts packets
+firmware/rx/main/main.cc  receiver: the whole firmware, one commented file
+firmware/tx/main/main.cc  transmitter: the whole firmware, one commented file
+docs/signal-path.html   clickable diagram of the system
 hub/csi_hub.py          central collector (subscribe, stamp, per-node CSV, live plot)
 hub/mqtt_fake_tx.py     publishes synthetic CSI records (test without hardware)
 hub/mosquitto.conf.example
@@ -72,7 +70,8 @@ sensing vs. reporting configuration stays independent.
 
 ## Prerequisites
 
-- Two **ESP32-C6** dev boards. Flash and monitor through the board's
+- A **2.4 GHz** home WiFi network (the C6 has no 5 GHz radio).
+- Two or more **ESP32-C6** dev boards. Flash and monitor through the board's
   **UART / CH343** USB port, not the native USB port: the console is on UART0,
   so the native port shows nothing.
 - [PlatformIO Core](https://platformio.org/install) (`brew install platformio`)
@@ -91,42 +90,51 @@ Flash one board at a time; with a single board plugged in PlatformIO finds the
 port itself. If upload can't connect, hold **BOOT** while it says *Connecting…*.
 
 ```bash
-# receiver (detector/AP)
+# receiver
 cd firmware/rx && pio run -t upload && pio device monitor --echo   # 921600 baud
 
 # transmitter
 cd firmware/tx && pio run -t upload && pio device monitor --echo
 ```
 
-Build defaults come from `sdkconfig.defaults` (SSID, channel, packet rate,
-MQTT, etc.). To tweak at build time: `pio run -t menuconfig`.
+Build defaults come from `sdkconfig.defaults` (packet rate, MQTT topic,
+etc.). WiFi credentials are deliberately empty there; set them per board over
+serial so they're never committed.
 
 ## Provisioning (config-only receiver scaling)
 
-The firmware is **identical on every board**. Everything per-board is
-configured at runtime over the serial console and stored in NVS — no code
-changes, no re-flash:
+Each role's firmware is **identical on every board**. Everything per-board is
+typed into the serial console (`pio device monitor --echo`) and stored in NVS,
+so it survives reflashing:
 
 ```
-NODEID:   rx-1          # unique node ID  -> topic csi/rx-1/data, column node_id
-MQTTHOST: 192.168.4.2   # where mosquitto runs (the laptop, on the sensing network)
-MQTTPORT: 1883
-MQTTTOPIC: csi
-APSSID:   wifi-sense-rx  # sensing network name (RX is the AP)
-APPASS:   wifi-sense-123
-APCH:     6               # sensing channel; TX (STACH) must agree
-SHOWCONFIG                 # print current values
-REBOOT                     # apply
+# every board
+STASSID:  <your 2.4 GHz WiFi name>
+STAPASS:  <your WiFi password>      # stored, never printed back
+
+# each receiver
+NODEID:   rx-1                      # unique -> topic csi/rx-1/data, column node_id
+MQTTHOST: <laptop's IP on the WiFi> # where mosquitto runs: ipconfig getifaddr en0
+
+# transmitter
+RATE:     100                       # packets/s, applies live
+
+SHOWCONFIG                          # print current values
+REBOOT                              # apply
 ```
 
-Transmitter (station) keys: `STASSID`, `STAPASS`, `STACH` (0 = auto-scan),
-`RATE` (packets/s, applies live). `SETTIME: <sec>.<usec>` is also available
-from upstream but clock sync is out of scope — the hub's arrival time is the
-reference.
+On boot the TX logs `sending as 1a:00:00:00:00:01`; each RX logs
+`joined "<network>": ip ..., channel N`. All boards should report the same
+channel.
 
-**Add a receiver:** flash a board with the same `csi-rx` firmware, give it a
-new `NODEID`, point it at the broker, reboot. The hub picks it up
-automatically (subscribes `csi/+/data`, writes `data/<node_id>.csv`).
+**Add a receiver:** flash `firmware/rx`, set `STASSID`, `STAPASS`, a new
+`NODEID` and `MQTTHOST`, reboot. It hears the existing TX straight away, and
+the hub picks it up automatically (subscribes `csi/+/data`, writes
+`data/<node_id>.csv`).
+
+Give the laptop a fixed address in your router (a DHCP reservation) so
+`MQTTHOST` stays valid. Clock sync is out of scope; the hub's arrival time is
+the reference.
 
 ## Run the hub
 
@@ -165,15 +173,14 @@ window — a moving body creates a characteristic time-varying pattern. The
 hub's `--live` plot does this: a heatmap of every subcarrier's amplitude over
 the last 20 s, and a motion score (rolling std of gain-normalized amplitude,
 averaged over subcarriers) that sits flat when the room is still and jumps
-when someone crosses the link. It plots only the node's dominant source MAC
-(the TX), since other stations on the AP also produce CSI.
+when someone crosses the link.
 
 ## Notes & limitations
 
-- **Single radio.** The RX senses and reports over the one ESP32 WiFi radio.
-  In the PoC the MQTT traffic rides the same sensing network; sensing-channel
-  and MQTT settings are separate config blocks so this can change later
-  (e.g. wired Ethernet on the RX) with zero firmware surgery.
+- **Single radio.** Each RX senses and reports over its one WiFi radio, so
+  the sensing channel is the home WiFi's channel. Sensing and reporting
+  settings are separate groups, so moving reporting to Ethernet later would
+  free the channel without changing the record format or hub.
 - **QoS 0 + drop-when-disconnected.** Records are dropped, never buffered, so
   a dead broker costs you data but not memory.
 - **Effective rate.** CSI at ~100+ Hz means hundreds of small MQTT messages/s;

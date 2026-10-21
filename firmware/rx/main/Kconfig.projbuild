@@ -1,36 +1,25 @@
-menu "Sensing Network Config (RX)"
+menu "Home WiFi"
 
-    config AP_SSID
-        string "AP SSID (sensing network name)"
-        default "wifi-sense-rx"
+    config STA_SSID
+        string "WiFi network name (2.4 GHz)"
+        default ""
         help
-            The receiver acts as the access point for the sensing link. The
-            transmitter and the hub's laptop both connect to this network.
-            Setting this here only seeds the default; override per board at
-            runtime with the serial command APSSID: <name>.
+            Every board joins this network. The TX and all RXs then share its
+            channel, which is the sensing channel. Leave empty here and set it
+            per board over serial with STASSID: <name>, so it isn't committed.
 
-    config AP_PASSWORD
-        string "AP Password (min 8 chars, empty = open)"
-        default "wifi-sense-123"
+    config STA_PASSWORD
+        string "WiFi password"
+        default ""
         help
-            WPA2 password for the sensing network. If left empty the AP runs
-            open. Minimum length for WPA2 is 8 characters.
+            Set over serial with STAPASS: <password>. Stored in the board's
+            NVS; never printed back.
 
-    config AP_CHANNEL
-        int "AP WiFi Channel"
-        default 6
-        range 1 14
-        help
-            WiFi channel the sensing AP operates on. In North America valid
-            channels are 1..11. Both TX (STA_CHANNEL) and RX (AP_CHANNEL)
-            must agree on the sensing channel.
+endmenu
 
-    config SHOULD_COLLECT_CSI
-        bool "Should this ESP32 collect and print/publish CSI data?"
-        default "y"
+menu "Debug (RX)"
 
     config SEND_CSI_TO_SERIAL
-        depends on SHOULD_COLLECT_CSI
         bool "Send CSI data to Serial"
         default "y"
         help
@@ -52,10 +41,8 @@ menu "Reporting Network Config (RX)"
         string "MQTT Broker Host (IP or hostname)"
         default ""
         help
-            Reachable broker on the sensing network (e.g. the laptop running
-            mosquitto). This is the reporting network - deliberately separate
-            from the sensing channel config above. Override at runtime with
-            MQTTHOST: <ip>.
+            The laptop running mosquitto, by its address on the home WiFi.
+            Override at runtime with MQTTHOST: <ip>.
 
     config MQTT_PORT
         int "MQTT Broker Port"
@@ -69,13 +56,5 @@ menu "Reporting Network Config (RX)"
             Records are published to <mqtt_topic>/<node_id>/data. The hub
             subscribes to <mqtt_topic>/+/data so any number of nodes merge
             into one stream.
-
-    config SEND_CSI_TO_MQTT
-        depends on SHOULD_COLLECT_CSI
-        bool "Publish CSI to MQTT"
-        default "y"
-        help
-            Each CSI capture is published as a CSV record carrying
-            node_id,seq,raw CSI. Requires MQTT_HOST to be configured.
 
 endmenu

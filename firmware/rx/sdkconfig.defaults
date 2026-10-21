@@ -12,13 +12,11 @@ CONFIG_PARTITION_TABLE_SINGLE_APP_LARGE=y
 CONFIG_FREERTOS_HZ=1000
 CONFIG_ESP_WIFI_CSI_ENABLED=y
 
-# --- sensing channel (RX is the AP) ---
-CONFIG_AP_SSID="wifi-sense-rx"
-CONFIG_AP_PASSWORD="wifi-sense-123"
-CONFIG_AP_CHANNEL=6
+# --- home WiFi: set per board over serial (STASSID:/STAPASS:), never committed ---
+CONFIG_STA_SSID=""
+CONFIG_STA_PASSWORD=""
 
-# --- CSI collection ---
-CONFIG_SHOULD_COLLECT_CSI=y
+# --- debug: also print every CSI record on USB serial ---
 CONFIG_SEND_CSI_TO_SERIAL=y
 
 # --- reporting network (MQTT), defaults used if not overridden via serial ---
@@ -26,7 +24,6 @@ CONFIG_NODE_ID="rx-1"
 CONFIG_MQTT_HOST=""
 CONFIG_MQTT_PORT=1883
 CONFIG_MQTT_TOPIC="csi"
-CONFIG_SEND_CSI_TO_MQTT=y
 
 # Plaintext MQTT to a local broker only -> drop the TLS/websocket transports.
 CONFIG_MQTT_TRANSPORT_SSL=n

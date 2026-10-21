@@ -8,14 +8,12 @@ CONFIG_ESP_CONSOLE_UART_BAUDRATE=921600
 CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
 CONFIG_PARTITION_TABLE_SINGLE_APP_LARGE=y
 
-# --- 1 ms ticks: the packet-rate loop delays in ms via vTaskDelay ---
+# --- 1 ms ticks, so the packet period (1000 / RATE ms) is exact ---
 CONFIG_FREERTOS_HZ=1000
 
-# --- sensing channel (TX is the station, connects to the RX's AP) ---
-CONFIG_STA_SSID="wifi-sense-rx"
-CONFIG_STA_PASSWORD="wifi-sense-123"
-CONFIG_STA_CHANNEL=0
-CONFIG_PACKET_RATE=100
+# --- home WiFi: set per board over serial (STASSID:/STAPASS:), never committed ---
+CONFIG_STA_SSID=""
+CONFIG_STA_PASSWORD=""
 
-# --- CSI collection is OFF on the transmitter ---
-CONFIG_SHOULD_COLLECT_CSI=n
+# --- sensing: ESP-NOW broadcast rate ---
+CONFIG_PACKET_RATE=100
