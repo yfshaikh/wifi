@@ -281,28 +281,63 @@ static void mqtt_start() {
 // any of our TXs counts and an RX needs no TX-specific setup.
 static const uint8_t TX_MAC_PREFIX[5] = {0x1a, 0x00, 0x00, 0x00, 0x00};
 
-// Per-board record counter, written to the `seq` column. Only csi_callback
-// touches it, and that always runs in the same task, so no lock is needed.
-static uint32_t seq = 0;
+// The TX puts these 4 bytes before its frame counter (see tx/main/main.cc).
+static const uint8_t TX_MAGIC[4] = {'C', 'S', 'I', '1'};
+
+// Per-board counters. Only csi_callback touches them, and it always runs in
+// the same task, so no lock is needed.
+static uint32_t seq = 0;             // records produced by this board (`seq` column)
+static uint32_t invalid_total = 0;   // TX frames dropped because the C6 flagged their CSI invalid
+
+// Find the TX's frame counter inside the received frame. ESP-NOW wraps our
+// 8-byte payload in a vendor-specific action frame, so search the frame body
+// for the magic rather than hard-coding an offset. Returns -1 if not found.
+static long find_tx_counter(const wifi_csi_info_t *info) {
+    if (info->payload == nullptr) {
+        return -1;
+    }
+    for (int i = 0; i + 8 <= info->payload_len; i++) {
+        if (memcmp(info->payload + i, TX_MAGIC, sizeof(TX_MAGIC)) == 0) {
+            uint32_t counter;
+            memcpy(&counter, info->payload + i + 4, sizeof(counter));   // memcpy: may be unaligned
+            return (long) counter;
+        }
+    }
+    return -1;
+}
 
 /*
  * Called by the WiFi driver task (prio 23) for every received frame it has
  * CSI for: possibly hundreds per second from all devices on the channel.
  * Rules for code here: be quick, never block, never wait on a lock.
  *
- * Record layout (comma separated), kept identical to the original CSI tool so
- * the hub's CSV header never changes:
- *   node_id,seq,role,mac,rssi,rate,sig_mode,mcs,bandwidth,smoothing,
+ * Record layout (comma separated):
+ *   node_id,seq,rx_seq,tx_counter,invalid_total,
+ *   role,mac,rssi,rate,sig_mode,mcs,bandwidth,smoothing,
  *   not_sounding,aggregation,stbc,fec_coding,sgi,noise_floor,ampdu_cnt,
  *   channel,secondary_channel,local_timestamp,ant,sig_len,rx_state,
  *   real_time_set,real_timestamp,len,[csi]
  * The C6's radio doesn't report mcs, smoothing, not_sounding, aggregation,
  * stbc, fec_coding, sgi, ampdu_cnt or ant, so those are always 0, as is
  * real_time_set (no clock sync; the hub's arrival time is the timeline).
+ *
+ * The three alignment columns:
+ *   rx_seq         the TX frame's 802.11 sequence number (0-4095, wraps). The
+ *                  same frame has the same rx_seq at every receiver.
+ *   tx_counter     the TX's own 32-bit frame counter from the payload (never
+ *                  wraps; -1 if not found). Use it to line receivers up exactly
+ *                  and to count lost frames per receiver.
+ *   invalid_total  running count of TX frames dropped for invalid CSI.
  */
 static void csi_callback(void *ctx, wifi_csi_info_t *info) {
     // We hear the whole channel, so drop everything that isn't our TX first.
     if (memcmp(info->mac, TX_MAC_PREFIX, sizeof(TX_MAC_PREFIX)) != 0) {
+        return;
+    }
+    // The C6 can deliver CSI it flagged as invalid (esp-idf issue #14271).
+    // Drop it, but count it, so data quality stays visible.
+    if (!info->rx_ctrl.rx_channel_estimate_info_vld) {
+        invalid_total++;
         return;
     }
     seq++;
@@ -310,7 +345,7 @@ static void csi_callback(void *ctx, wifi_csi_info_t *info) {
     // `static` buffers live in RAM permanently instead of on the WiFi task's
     // small stack. Safe only because this function never runs twice at once.
     static char body[1024];     // everything from `role` onwards
-    static char record[1100];   // node_id,seq,body
+    static char record[1150];   // node_id,seq,rx_seq,tx_counter,invalid_total,body
 
     const wifi_pkt_rx_ctrl_t &rx = info->rx_ctrl;   // radio metadata for this frame
     const uint8_t *m = info->mac;
@@ -341,7 +376,8 @@ static void csi_callback(void *ctx, wifi_csi_info_t *info) {
     printf("CSI_DATA,%s\n", body);
 #endif
 
-    int len = snprintf(record, sizeof(record), "%s,%lu,%s", settings.node_id, (unsigned long) seq, body);
+    int len = snprintf(record, sizeof(record), "%s,%lu,%u,%ld,%lu,%s", settings.node_id, (unsigned long) seq,
+                       (unsigned) info->rx_seq, find_tx_counter(info), (unsigned long) invalid_total, body);
     queue_record(record, len);
 }
 

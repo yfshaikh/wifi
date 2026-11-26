@@ -17,7 +17,7 @@ import time
 
 import paho.mqtt.client as mqtt
 
-_RECORD_TEMPLATE = ("{node},{seq},RX,{mac},{rssi},{rate},1,{mcs},0,1,0,0,"
+_RECORD_TEMPLATE = ("{node},{seq},{rx_seq},{seq},0,RX,{mac},{rssi},{rate},1,{mcs},0,1,0,0,"
                     "0,0,1,{noise_floor},0,{channel},0,{local_ts},{ant},{sig_len},"
                     "{rx_state},0,{real_ts},{len},{csi}")
 
@@ -41,6 +41,7 @@ def build_record(node, seq, rssi_base):
     return _RECORD_TEMPLATE.format(
         node=node,
         seq=seq,
+        rx_seq=seq % 4096,
         mac="1A:00:00:00:00:01",  # the real TX's fixed address
         rssi=int(rssi_base + random.gauss(0, 1.5)),
         rate=11,

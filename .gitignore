@@ -10,4 +10,7 @@ coverage/
 __pycache__/
 *.pyc
 hub/data/*.csv
-.DS_Store.venv/
+.DS_Store
+.venv/
+# recordings: too large for git, back them up separately
+hub/data/

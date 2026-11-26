@@ -189,9 +189,15 @@ static const uint8_t BROADCAST[6] = {0xff, 0xff, 0xff, 0xff, 0xff, 0xff};
  * The tx task: hand one frame to the WiFi driver every 1/RATE seconds.
  *
  * esp_now_send() doesn't transmit by itself. It queues the frame, and the
- * WiFi driver task (prio 23) puts it on the air moments later. The payload is
- * just a 4-byte counter; the receivers measure the frame, not its contents.
+ * WiFi driver task (prio 23) puts it on the air moments later. The receivers
+ * measure the frame, not its contents; the payload only carries a marker and a
+ * frame counter, which receivers record so their streams can be lined up
+ * exactly and lost frames counted.
  */
+struct __attribute__((packed)) Beacon {   // packed: no padding, exactly 8 bytes on air
+    char magic[4];       // "CSI1": lets receivers find the counter in the frame
+    uint32_t counter;    // increments every frame, never wraps in practice
+};
 static void tx_task(void *arg) {
     // ESP-NOW only sends to registered "peers"; register the broadcast address.
     esp_now_peer_info_t peer = {};   // `= {}` zero-initialises every field
@@ -217,8 +223,9 @@ static void tx_task(void *arg) {
      * how long the loop body takes. Measured at the RX: 100.1 frames/s.
      */
     TickType_t last_wake = xTaskGetTickCount();
-    for (uint32_t counter = 0;; counter++) {   // tasks never return; they loop forever
-        esp_now_send(BROADCAST, (const uint8_t *) &counter, sizeof(counter));
+    Beacon beacon = {{'C', 'S', 'I', '1'}, 0};
+    for (;; beacon.counter++) {   // tasks never return; they loop forever
+        esp_now_send(BROADCAST, (const uint8_t *) &beacon, sizeof(beacon));
 
         // Re-read RATE every time, so a RATE: typed over serial applies at once.
         int pps = settings.packet_rate > 0 ? settings.packet_rate : 1;
